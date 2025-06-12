@@ -1,0 +1,29 @@
+# Core FastAPI and server
+fastapi==0.104.0
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+
+# Essential CV and ML
+opencv-python-headless==4.8.0.76
+numpy==1.21.6
+pillow==9.5.0
+
+# Deep Learning (lighter versions for Render)
+torch==2.0.1+cpu --extra-index-url https://download.pytorch.org/whl/cpu
+torchvision==0.15.2+cpu --extra-index-url https://download.pytorch.org/whl/cpu
+ultralytics==8.0.196
+
+# MediaPipe for pose analysis
+mediapipe==0.10.7
+
+# Data processing
+scipy==1.9.3
+pandas==2.0.3
+matplotlib==3.5.3
+
+# API utilities
+websockets==11.0.2
+python-jose[cryptography]==3.3.0
+
+# Essential utilities
+tqdm==4.66.1
