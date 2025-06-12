@@ -1,29 +1,46 @@
-# Core FastAPI and server
-fastapi==0.104.0
-uvicorn[standard]==0.24.0
-python-multipart==0.0.6
+# FastAPI and Web Server
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
 
-# Essential CV and ML
-opencv-python-headless==4.8.0.76
-numpy==1.21.6
-pillow==9.5.0
+# Core Computer Vision (same as before)
+opencv-python>=4.8.0
+numpy>=1.21.0
+pillow>=9.0.0
 
-# Deep Learning (lighter versions for Render)
-torch==2.0.1+cpu --extra-index-url https://download.pytorch.org/whl/cpu
-torchvision==0.15.2+cpu --extra-index-url https://download.pytorch.org/whl/cpu
-ultralytics==8.0.196
+# Deep Learning & ML (same as before)
+torch>=2.0.0
+torchvision>=0.15.0
+ultralytics>=8.0.0
+mediapipe>=0.10.0
 
-# MediaPipe for pose analysis
-mediapipe==0.10.7
+# Data Processing
+scipy>=1.9.0
+pandas>=2.0.0
+matplotlib>=3.5.0
 
-# Data processing
-scipy==1.9.3
-pandas==2.0.3
-matplotlib==3.5.3
+# API and Communication
+websockets>=11.0
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
 
-# API utilities
-websockets==11.0.2
-python-jose[cryptography]==3.3.0
+# Performance
+numba>=0.56.0
+pycocotools>=2.0.6
 
-# Essential utilities
-tqdm==4.66.1
+# Video Processing
+av>=10.0.0
+imageio>=2.31.0
+
+# Development and Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+httpx>=0.25.0  # For testing FastAPI
+
+# Progress and Logging
+tqdm>=4.64.0
+rich>=13.4.0
+
+# Optional - GPU Support
+# torch-directml>=0.2.0  # DirectML for Windows
+# torch-cuda>=2.0.0     # CUDA for NVIDIA GPUs

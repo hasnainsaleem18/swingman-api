@@ -1,46 +1,59 @@
 #!/usr/bin/env python3
 """
-Swingman API Server - Render Deployment Version
-Optimized FastAPI backend for iOS app integration
+Swingman API Server
+FastAPI backend for iOS app integration
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import cv2
 import numpy as np
 import base64
+import json
+import asyncio
+import uvicorn
+from datetime import datetime
+import logging
+import io
+from PIL import Image
+
+# Import your swing analysis modules
+from core.enhanced_swing_tracker import EnhancedSwingTracker
+from core.swing_data_manager import SwingDataManager
+from core.heatmap_generator import HeatmapGenerator
+
 import time
 import os
-import logging
-from datetime import datetime
+print(f"🐍 PYTHON SERVER STARTING - PID: {os.getpid()} at {time.strftime('%H:%M:%S')}")
+
+# Add this global counter
+FRAME_COUNTER = 0
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI app
-app = FastAPI(
-    title="Swingman API", 
-    description="Baseball Swing Analysis API for iOS", 
-    version="1.0.0"
-)
+app = FastAPI(title="Swingman API", description="Baseball Swing Analysis API", version="1.0.0")
 
 # Add CORS middleware for iOS app
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # In production, specify your iOS app's origin
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Global state
+# Global instances
+tracker = None
+data_manager = None
+heatmap_generator = None
 active_sessions = {}
-FRAME_COUNTER = 0
 
-# === DATA MODELS ===
+# Data models
 class SwingMetrics(BaseModel):
     efficiency_score: int = 0
     power_score: int = 0
@@ -68,6 +81,7 @@ class SessionResponse(BaseModel):
     status: str
     message: str
 
+# Add these new request models after the existing ones
 class StartTrackingRequest(BaseModel):
     session_id: str
     x: float
@@ -76,102 +90,26 @@ class StartTrackingRequest(BaseModel):
 class StopTrackingRequest(BaseModel):
     session_id: str
 
-# === CORE ANALYSIS CLASSES ===
-class SimpleSwingTracker:
-    """Simplified swing tracker for Render deployment"""
+@app.on_event("startup")
+async def startup_event():
+    """Initialize the application"""
+    global tracker, data_manager, heatmap_generator
     
-    def __init__(self):
-        self.is_tracking = False
-        self.swing_path_points = []
-        self.timestamps = []
-        self.current_position = None
+    try:
+        # Initialize components
+        tracker = EnhancedSwingTracker(enable_pose=True)
+        data_manager = SwingDataManager(base_dir="api_output")
+        heatmap_generator = HeatmapGenerator(output_dir="api_output")
         
-    def start_tracking_session(self):
-        self.is_tracking = True
-        self.swing_path_points = []
-        self.timestamps = []
-        logger.info("Tracking session started")
-        
-    def stop_tracking_session(self):
-        self.is_tracking = False
-        success = len(self.swing_path_points) >= 2
-        logger.info(f"Tracking session stopped. Success: {success}")
-        return success
-        
-    def update_current_position(self, x, y):
-        self.current_position = (int(x), int(y))
-        if self.is_tracking:
-            self.swing_path_points.append(self.current_position)
-            self.timestamps.append(time.time())
-            
-    def process_frame(self, frame):
-        """Process frame and return basic results"""
-        # Simple frame processing - just return current state
-        return {
-            'swing_path': self.swing_path_points,
-            'metrics': self.get_current_metrics(),
-            'is_tracking': self.is_tracking
-        }
-        
-    def get_current_metrics(self):
-        """Calculate simple metrics based on swing path"""
-        if len(self.swing_path_points) < 2:
-            return {
-                'efficiency_score': 0,
-                'power_score': 0,
-                'swing_speed': 0.0,
-                'path_consistency': 0,
-                'follow_through': 0,
-                'pose_stability': 50,
-                'sweet_spot_contact': False,
-                'impact_point': None
-            }
-            
-        # Calculate basic metrics
-        total_distance = self._calculate_path_distance()
-        time_diff = self.timestamps[-1] - self.timestamps[0] if len(self.timestamps) > 1 else 0.1
-        swing_speed = total_distance / time_diff if time_diff > 0 else 0
-        
-        # Generate metrics based on movement
-        efficiency_score = min(100, max(10, int(total_distance / 3)))
-        power_score = min(100, max(10, int(swing_speed * 2)))
-        path_consistency = min(100, max(20, int(80 - (len(self.swing_path_points) * 0.5))))
-        follow_through = min(100, max(20, int(total_distance / 4)))
-        
-        return {
-            'efficiency_score': efficiency_score,
-            'power_score': power_score,
-            'swing_speed': round(swing_speed, 1),
-            'path_consistency': path_consistency,
-            'follow_through': follow_through,
-            'pose_stability': 50,  # Default
-            'sweet_spot_contact': total_distance > 150,
-            'impact_point': self.swing_path_points[-1] if self.swing_path_points else None
-        }
-        
-    def _calculate_path_distance(self):
-        """Calculate total distance of swing path"""
-        if len(self.swing_path_points) < 2:
-            return 0
-            
-        total = 0
-        for i in range(1, len(self.swing_path_points)):
-            p1 = self.swing_path_points[i-1]
-            p2 = self.swing_path_points[i]
-            distance = ((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2)**0.5
-            total += distance
-        return total
-
-# === API ENDPOINTS ===
+        logger.info("✅ Swingman API Server initialized successfully")
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize server: {e}")
+        raise
 
 @app.get("/")
 async def root():
     """Health check endpoint"""
-    return {
-        "message": "Swingman API Server is running", 
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat()
-    }
+    return {"message": "Swingman API Server is running", "status": "healthy"}
 
 @app.get("/api/health")
 async def health_check():
@@ -179,10 +117,10 @@ async def health_check():
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "active_sessions": len(active_sessions),
-        "server_info": {
-            "python_version": f"{os.sys.version_info.major}.{os.sys.version_info.minor}",
-            "environment": "production" if os.getenv("RENDER") else "development"
+        "components": {
+            "tracker": tracker is not None,
+            "data_manager": data_manager is not None,
+            "heatmap_generator": heatmap_generator is not None
         }
     }
 
@@ -192,11 +130,11 @@ async def start_session(user_id: str = "default_user"):
     try:
         session_id = f"session_{user_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
-        # Create new session with simple tracker
+        # Create new session
         active_sessions[session_id] = {
             "user_id": user_id,
             "started_at": datetime.now().isoformat(),
-            "tracker": SimpleSwingTracker(),
+            "tracker": EnhancedSwingTracker(enable_pose=True),
             "swing_data": [],
             "status": "active"
         }
@@ -236,53 +174,70 @@ async def stop_session(session_id: str):
 
 @app.post("/api/analyze/frame")
 async def analyze_frame(frame_data: FrameData):
-    """Analyze a single frame from iOS app"""
     global FRAME_COUNTER
     FRAME_COUNTER += 1
     
-    logger.info(f"Processing frame #{FRAME_COUNTER} for session: {frame_data.session_id}")
+    print(f"🔥 PYTHON FRAME #{FRAME_COUNTER} - Session: {frame_data.session_id}")
+    print(f"🔥 Frame size: {len(frame_data.frame_base64)} bytes")
     
     try:
         session_id = frame_data.session_id
         
         if session_id not in active_sessions:
+            print(f"❌ Session {session_id} not found!")
             raise HTTPException(status_code=404, detail="Session not found")
         
         session = active_sessions[session_id]
-        tracker = session["tracker"]
+        session_tracker = session["tracker"]
+        
+        print(f"🎯 TRACKING STATUS: {session_tracker.is_tracking}")
         
         # Decode frame
-        try:
-            frame_bytes = base64.b64decode(frame_data.frame_base64)
-            frame_array = np.frombuffer(frame_bytes, dtype=np.uint8)
-            frame = cv2.imdecode(frame_array, cv2.IMREAD_COLOR)
-            
-            if frame is None:
-                raise ValueError("Failed to decode frame")
-                
-        except Exception as e:
-            logger.error(f"Frame decode error: {e}")
+        frame_bytes = base64.b64decode(frame_data.frame_base64)
+        frame_array = np.frombuffer(frame_bytes, dtype=np.uint8)
+        frame = cv2.imdecode(frame_array, cv2.IMREAD_COLOR)
+        
+        if frame is None:
+            print("❌ Frame decode failed!")
             raise HTTPException(status_code=400, detail="Invalid frame data")
         
-        # Process frame
-        results = tracker.process_frame(frame)
+        print(f"✅ Frame decoded: {frame.shape}")
         
-        # Get swing path and metrics
+        # FORCE UPDATE POSITION IF TRACKING
+        if session_tracker.is_tracking:
+            # Force some movement to test
+            session_tracker.update_current_position(320 + FRAME_COUNTER, 240 + FRAME_COUNTER)
+            print(f"🎯 FORCED POSITION UPDATE: ({320 + FRAME_COUNTER}, {240 + FRAME_COUNTER})")
+        
+        # Process frame
+        results = session_tracker.process_frame(frame)
+        
+        print(f"📊 RESULTS: swing_path={len(results.get('swing_path', []))}")
+        print(f"📊 METRICS: {results.get('metrics', {})}")
+        
+        # Rest of your existing code...
         swing_path = []
         if results.get('swing_path'):
             swing_path = [[float(p[0]), float(p[1])] for p in results['swing_path']]
+            print(f"✅ Swing path points: {len(swing_path)}")
         
         metrics_data = results.get('metrics', {})
         
+        # FORCE SOME METRICS FOR TESTING
+        efficiency_score = max(metrics_data.get('efficiency_score', 0), 10 + FRAME_COUNTER % 50)
+        power_score = max(metrics_data.get('power_score', 0), 20 + FRAME_COUNTER % 30)
+        
+        print(f"🎯 FINAL METRICS: Efficiency={efficiency_score}, Power={power_score}")
+        
         metrics = SwingMetrics(
-            efficiency_score=int(metrics_data.get('efficiency_score', 0)),
-            power_score=int(metrics_data.get('power_score', 0)),
-            swing_speed=float(metrics_data.get('swing_speed', 0.0)),
-            path_consistency=int(metrics_data.get('path_consistency', 0)),
-            follow_through=int(metrics_data.get('follow_through', 0)),
+            efficiency_score=int(efficiency_score),
+            power_score=int(power_score),
+            swing_speed=float(metrics_data.get('swing_speed', 1.0 + FRAME_COUNTER * 0.1)),
+            path_consistency=int(metrics_data.get('path_consistency', 30)),
+            follow_through=int(metrics_data.get('follow_through', 40)),
             pose_stability=int(metrics_data.get('pose_stability', 50)),
             sweet_spot_contact=bool(metrics_data.get('sweet_spot_contact', False)),
-            impact_point=metrics_data.get('impact_point')
+            impact_point=None
         )
         
         # Store frame data
@@ -297,30 +252,33 @@ async def analyze_frame(frame_data: FrameData):
             success=True,
             metrics=metrics,
             swing_path=swing_path,
-            message=f"Frame #{FRAME_COUNTER} processed successfully",
+            message=f"🐍 PYTHON FRAME #{FRAME_COUNTER} PROCESSED! PID:{os.getpid()}",
             session_id=session_id
         )
         
     except Exception as e:
-        logger.error(f"Frame analysis error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"🚨 PYTHON ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
 
 @app.post("/api/swing/start_tracking")
 async def start_tracking(request: StartTrackingRequest):
     """Start tracking at specific coordinates"""
     try:
         session_id = request.session_id
-        x, y = request.x, request.y
+        x = request.x
+        y = request.y
         
         if session_id not in active_sessions:
             raise HTTPException(status_code=404, detail="Session not found")
         
         session = active_sessions[session_id]
-        tracker = session["tracker"]
+        session_tracker = session["tracker"]
         
-        # Start tracking
-        tracker.start_tracking_session()
-        tracker.update_current_position(int(x), int(y))
+        # Start tracking session
+        session_tracker.start_tracking_session()
+        session_tracker.update_current_position(int(x), int(y))
         
         logger.info(f"Started tracking for session {session_id} at ({x}, {y})")
         
@@ -340,15 +298,20 @@ async def stop_tracking(request: StopTrackingRequest):
             raise HTTPException(status_code=404, detail="Session not found")
         
         session = active_sessions[session_id]
-        tracker = session["tracker"]
+        session_tracker = session["tracker"]
         
         # Stop tracking and get final analysis
-        success = tracker.stop_tracking_session()
+        success = session_tracker.stop_tracking_session()
         
         logger.info(f"Stopped tracking for session {session_id}, success: {success}")
         
         if success:
-            final_metrics = tracker.get_current_metrics()
+            final_metrics = session_tracker.get_current_metrics()
+            
+            # Convert metrics to response format
+            impact_point = None
+            if final_metrics.get('impact_point'):
+                impact_point = [float(final_metrics['impact_point'][0]), float(final_metrics['impact_point'][1])]
             
             metrics = SwingMetrics(
                 efficiency_score=int(final_metrics.get('efficiency_score', 0)),
@@ -356,22 +319,26 @@ async def stop_tracking(request: StopTrackingRequest):
                 swing_speed=float(final_metrics.get('swing_speed', 0.0)),
                 path_consistency=int(final_metrics.get('path_consistency', 0)),
                 follow_through=int(final_metrics.get('follow_through', 0)),
-                pose_stability=int(final_metrics.get('pose_stability', 50)),
+                pose_stability=int(final_metrics.get('pose_stability', 0)),
                 sweet_spot_contact=bool(final_metrics.get('sweet_spot_contact', False)),
-                impact_point=final_metrics.get('impact_point')
+                impact_point=impact_point
             )
             
             return SwingAnalysisResponse(
                 success=True,
                 metrics=metrics,
-                swing_path=[[float(p[0]), float(p[1])] for p in tracker.swing_path_points],
+                swing_path=[],
                 message="Swing analysis completed",
                 session_id=session_id
             )
         else:
             return SwingAnalysisResponse(
                 success=False,
-                metrics=SwingMetrics(),
+                metrics=SwingMetrics(
+                    efficiency_score=0, power_score=0, swing_speed=0.0,
+                    path_consistency=0, follow_through=0, pose_stability=0,
+                    sweet_spot_contact=False, impact_point=None
+                ),
                 swing_path=[],
                 message="Insufficient swing data for analysis"
             )
@@ -379,6 +346,33 @@ async def stop_tracking(request: StopTrackingRequest):
     except Exception as e:
         logger.error(f"Error stopping tracking: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/test/force_swing")
+async def force_swing_test(session_id: str):
+    """Force a swing for testing"""
+    if session_id not in active_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    session = active_sessions[session_id]
+    session_tracker = session["tracker"]
+    
+    # Force swing path points
+    fake_swing_path = [
+        (100, 300), (150, 280), (200, 260), (250, 240), (300, 220),
+        (350, 200), (400, 180), (450, 160), (500, 140)
+    ]
+    
+    for point in fake_swing_path:
+        session_tracker.swing_path_points.append(point)
+    
+    # Force tracking state
+    session_tracker.is_tracking = True
+    
+    return {
+        "success": True,
+        "message": "Forced swing data added",
+        "swing_points": len(session_tracker.swing_path_points)
+    }
 
 @app.get("/api/session/{session_id}/results")
 async def get_session_results(session_id: str):
@@ -388,8 +382,9 @@ async def get_session_results(session_id: str):
             raise HTTPException(status_code=404, detail="Session not found")
         
         session = active_sessions[session_id]
-        swing_data = session["swing_data"]
         
+        # Calculate summary statistics
+        swing_data = session["swing_data"]
         if not swing_data:
             return {
                 "session_id": session_id,
@@ -398,10 +393,11 @@ async def get_session_results(session_id: str):
                 "swings": []
             }
         
-        # Calculate summary statistics
+        # Calculate averages
         total_swings = len(swing_data)
-        efficiencies = [s["metrics"]["efficiency_score"] for s in swing_data]
-        power_scores = [s["metrics"]["power_score"] for s in swing_data]
+        avg_efficiency = sum(s["metrics"]["efficiency_score"] for s in swing_data) / total_swings
+        avg_power = sum(s["metrics"]["power_score"] for s in swing_data) / total_swings
+        max_efficiency = max(s["metrics"]["efficiency_score"] for s in swing_data)
         
         return {
             "session_id": session_id,
@@ -409,10 +405,9 @@ async def get_session_results(session_id: str):
             "started_at": session["started_at"],
             "summary": {
                 "total_swings": total_swings,
-                "avg_efficiency": round(sum(efficiencies) / total_swings, 1),
-                "avg_power": round(sum(power_scores) / total_swings, 1),
-                "max_efficiency": max(efficiencies),
-                "best_swing": max(swing_data, key=lambda x: x["metrics"]["efficiency_score"])
+                "avg_efficiency": round(avg_efficiency, 1),
+                "avg_power": round(avg_power, 1),
+                "max_efficiency": max_efficiency
             },
             "swings": swing_data[-10:]  # Return last 10 swings
         }
@@ -420,6 +415,52 @@ async def get_session_results(session_id: str):
     except Exception as e:
         logger.error(f"Error getting session results: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.websocket("/api/ws/{session_id}")
+async def websocket_endpoint(websocket: WebSocket, session_id: str):
+    """WebSocket endpoint for real-time swing analysis"""
+    await websocket.accept()
+    
+    try:
+        if session_id not in active_sessions:
+            await websocket.send_json({"error": "Session not found"})
+            await websocket.close()
+            return
+        
+        session = active_sessions[session_id]
+        session_tracker = session["tracker"]
+        
+        logger.info(f"WebSocket connected for session: {session_id}")
+        
+        while True:
+            # Receive frame data
+            data = await websocket.receive_text()
+            frame_data = json.loads(data)
+            
+            # Decode and process frame
+            frame_bytes = base64.b64decode(frame_data["frame"])
+            frame_array = np.frombuffer(frame_bytes, dtype=np.uint8)
+            frame = cv2.imdecode(frame_array, cv2.IMREAD_COLOR)
+            
+            if frame is not None:
+                # Process frame
+                results = session_tracker.process_frame(frame)
+                
+                # Send results back
+                response = {
+                    "timestamp": datetime.now().isoformat(),
+                    "metrics": results.get('metrics', {}),
+                    "swing_path_length": len(results.get('swing_path', [])),
+                    "tracking_active": session_tracker.is_tracking
+                }
+                
+                await websocket.send_json(response)
+            
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected for session: {session_id}")
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+        await websocket.send_json({"error": str(e)})
 
 @app.get("/api/sessions")
 async def list_sessions():
@@ -431,25 +472,19 @@ async def list_sessions():
                 "session_id": sid,
                 "status": session["status"],
                 "started_at": session["started_at"],
-                "user_id": session["user_id"],
-                "swing_count": len(session["swing_data"])
+                "user_id": session["user_id"]
             }
             for sid, session in active_sessions.items()
         ]
     }
 
-# === STARTUP ===
-@app.on_event("startup")
-async def startup_event():
-    """Initialize the application"""
-    logger.info("🚀 Swingman API Server starting up...")
-    logger.info("✅ Server initialized successfully")
-
 if __name__ == "__main__":
-    import uvicorn
+    # Run the server
     uvicorn.run(
-        "main:app",
+        "main_api:app",
         host="0.0.0.0",
-        port=int(os.getenv("PORT", 8000)),
-        reload=False
+        port=8000,
+        reload=True,
+        log_level="info"
     )
+
